@@ -1,0 +1,12 @@
+.github/
+.husky/
+.kiro/
+src/
+vitest.config.ts
+tsconfig.json
+eslint.config.mjs
+commitlint.config.js
+coverage/
+node_modules/
+*.log
+*.tsbuildinfo

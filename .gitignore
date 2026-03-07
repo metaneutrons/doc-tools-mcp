@@ -1,0 +1,12 @@
+node_modules/
+dist/
+coverage/
+.env
+.env.*
+.DS_Store
+*.tsbuildinfo
+npm-debug.log*
+.vscode/
+.idea/
+*.swp
+.kiro/settings/

@@ -1,0 +1,67 @@
+name: Publish
+
+on:
+  push:
+    branches: [main, develop]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+
+      # --- develop → GitHub Packages (beta) ---
+      - name: Publish beta to GitHub Packages
+        if: github.ref == 'refs/heads/develop'
+        run: |
+          PACKAGE_VERSION=$(node -p "require('./package.json').version")
+          BETA_VERSION="${PACKAGE_VERSION}-beta.${{ github.run_number }}"
+          npm version "$BETA_VERSION" --no-git-tag-version
+          echo "//npm.pkg.github.com/:_authToken=${{ secrets.GITHUB_TOKEN }}" > .npmrc
+          echo "@metaneutrons:registry=https://npm.pkg.github.com" >> .npmrc
+          npm publish --tag beta || echo "Version already exists, skipping"
+
+      # --- main → npmjs + GitHub Release ---
+      - name: Check if version is new
+        if: github.ref == 'refs/heads/main'
+        id: version_check
+        run: |
+          PACKAGE_VERSION=$(node -p "require('./package.json').version")
+          echo "version=$PACKAGE_VERSION" >> "$GITHUB_OUTPUT"
+          if git tag -l "v$PACKAGE_VERSION" | grep -q .; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish to npmjs
+        if: github.ref == 'refs/heads/main' && steps.version_check.outputs.exists == 'false'
+        run: |
+          echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" > .npmrc
+          npm publish --registry https://registry.npmjs.org --access public
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Create GitHub Release
+        if: github.ref == 'refs/heads/main' && steps.version_check.outputs.exists == 'false'
+        run: |
+          VERSION="v${{ steps.version_check.outputs.version }}"
+          gh release create "$VERSION" \
+            --title "$VERSION" \
+            --generate-notes \
+            --target main
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

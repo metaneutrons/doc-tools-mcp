@@ -1,0 +1,44 @@
+name: Dependencies
+
+on:
+  schedule:
+    - cron: '0 8 * * 1'
+  workflow_dispatch:
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: develop
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Update dependencies
+        run: |
+          npx npm-check-updates -u
+          npm install
+          npm run build
+          npm test
+      - name: Create PR if changes
+        run: |
+          if git diff --quiet package.json package-lock.json; then
+            echo "No dependency updates"
+            exit 0
+          fi
+          BRANCH="deps/update-$(date +%Y%m%d)"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add package.json package-lock.json
+          git commit -m "chore(deps): update dependencies"
+          git push origin "$BRANCH"
+          gh pr create --title "chore(deps): update dependencies" --body "Automated dependency update" --base develop
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
