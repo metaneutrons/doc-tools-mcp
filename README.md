@@ -42,20 +42,13 @@ npx @metaneutrons/doc-tools-mcp
   "mcpServers": {
     "doc-tools": {
       "command": "npx",
-      "args": ["-y", "@metaneutrons/doc-tools-mcp"],
-      "env": {
-        "DOCTOOLS_CSL_FILE": "/path/to/your/references.yaml"
-      }
+      "args": ["-y", "@metaneutrons/doc-tools-mcp"]
     }
   }
 }
 ```
 
-## Environment Variables
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `DOCTOOLS_CSL_FILE` | Yes | Path to the CSL-YAML bibliography file |
+All `bib:*` tools require a `file` parameter — the path to the CSL-YAML bibliography file. The LLM discovers this automatically from `bibliography:` in `pandoc.yaml` or the YAML frontmatter of your `.md` files.
 
 ## Development
 
