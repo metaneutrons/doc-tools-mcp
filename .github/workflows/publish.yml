@@ -32,7 +32,7 @@ jobs:
           npm version "$BETA_VERSION" --no-git-tag-version
           echo "//npm.pkg.github.com/:_authToken=${{ secrets.GITHUB_TOKEN }}" > .npmrc
           echo "@metaneutrons:registry=https://npm.pkg.github.com" >> .npmrc
-          npm publish --tag beta || echo "Version already exists, skipping"
+          npm publish || echo "Version already exists, skipping"
 
       # --- main → npmjs + GitHub Release ---
       - name: Check if version is new
