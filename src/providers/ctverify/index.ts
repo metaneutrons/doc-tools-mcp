@@ -86,10 +86,18 @@ class CtverifyProvider implements Provider {
     const extracted = await extractCitations(file);
     if (registry_path) {
       const existing = await this.loadRegistry(registry_path);
-      const byId = new Map(existing.map(e => [e.id, e]));
-      const merged = extracted.map(e => byId.get(e.id) ?? e);
+      const extractedIds = new Set(extracted.map(e => e.id));
+      // Match by file+cite text to survive line number changes
+      const byCite = new Map(existing.map(e => [`${e.file}\0${e.cite}`, e]));
+      const merged = [
+        ...existing.filter(e => !extractedIds.has(e.id) && !extracted.some(x => x.file === e.file && x.cite === e.cite)),
+        ...extracted.map(e => {
+          const prev = byCite.get(`${e.file}\0${e.cite}`);
+          return prev ? { ...e, claim: prev.claim, status: prev.status, note: prev.note } : e;
+        }),
+      ];
       await this.saveRegistry(registry_path, merged);
-      const newCount = merged.filter(e => !byId.has(e.id)).length;
+      const newCount = extracted.filter(e => !byCite.has(`${e.file}\0${e.cite}`)).length;
       return { content: [{ type: 'text', text: `${extracted.length} citations extracted, ${newCount} new. Registry: ${registry_path}\n\n${this.formatEntries(merged)}` }] };
     }
     return { content: [{ type: 'text', text: `${extracted.length} citations:\n\n${this.formatEntries(extracted)}` }] };
