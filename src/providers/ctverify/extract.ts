@@ -16,6 +16,7 @@ export async function extractCitations(filePath: string): Promise<CitationEntry[
     const line = lines[i];
     // Match all ^[...] footnotes on this line (handle nested brackets)
     let pos = 0;
+    let citeIdx = 0;
     while (pos < line.length) {
       const start = line.indexOf('^[', pos);
       if (start === -1) break;
@@ -40,7 +41,7 @@ export async function extractCitations(filePath: string): Promise<CitationEntry[
         const cite = cites[idx].replace(/^\s+|\s+$/g, '').replace(/\.?\]?$/, '').replace(/^\[?/, '');
         if (!cite || cite.length < 5) continue;
         entries.push({
-          id: `${base}:${i + 1}:${idx}`,
+          id: `${base}:${i + 1}:${citeIdx}`,
           file: filePath,
           line: i + 1,
           cite,
@@ -48,6 +49,7 @@ export async function extractCitations(filePath: string): Promise<CitationEntry[
           status: 'pending',
           note: '',
         });
+        citeIdx++;
       }
       pos = end + 1;
     }
