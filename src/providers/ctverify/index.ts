@@ -19,7 +19,7 @@ const tools: ToolDefinition[] = [
       'Use `registry_path` to save/merge results into a JSON registry file (preserves existing claims and statuses). ' +
       'Workflow: extract → set claims → verify each claim against the source using research tools → update status.',
     inputSchema: z.object({
-      file: z.union([z.string(), z.array(z.string())]).describe('Path(s) to Markdown file(s) to extract citations from'),
+      file: z.union([z.string(), z.array(z.string())]).describe('Single path or array of paths to Markdown files to extract citations from'),
       registry_path: z.string().optional().describe('Path to save/merge the citation registry JSON file'),
     }),
   },
