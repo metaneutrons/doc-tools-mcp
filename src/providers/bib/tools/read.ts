@@ -1,10 +1,18 @@
 import { z } from 'zod';
 import { ToolDefinition } from '../../../shared/types.js';
 
-/** Shared file parameter — every bib tool needs this */
-export const fileParam = z.string().describe(
+/** Shared file parameter — optional, falls back to DT_BIB_YAML env var */
+export const fileParam = z.string().optional().describe(
   'Absolute path to the CSL-YAML bibliography file. ' +
+  'Falls back to DT_BIB_YAML env var if not provided. ' +
   'Look for "bibliography:" in pandoc.yaml or the YAML frontmatter of .md files to find the path.'
+);
+
+/** Shared style parameter — optional, falls back to DT_BIB_CSL env var */
+export const styleParam = z.string().optional().describe(
+  'Absolute path to a CSL style file (.csl). ' +
+  'Falls back to DT_BIB_CSL env var if not provided. ' +
+  'When set, required-field validation uses the variables referenced in the style.'
 );
 
 export const readTools: ToolDefinition[] = [

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { ToolDefinition } from '../../../shared/types.js';
-import { fileParam } from './read.js';
+import { fileParam, styleParam } from './read.js';
 
 export const writeTools: ToolDefinition[] = [
   {
@@ -10,6 +10,7 @@ export const writeTools: ToolDefinition[] = [
       'and creates a .bak backup before writing. Returns the created YAML block for confirmation.',
     inputSchema: z.object({
       file: fileParam,
+      style: styleParam,
       entry: z.object({
         id: z.string().describe('Unique citation ID (e.g., "BGH_I_ZR_42_22")'),
         type: z.string().describe('CSL type (e.g., "legal_case", "book", "article-journal", "chapter")'),
@@ -46,6 +47,7 @@ export const writeTools: ToolDefinition[] = [
       'all other fields remain untouched. Creates a .bak backup before writing.',
     inputSchema: z.object({
       file: fileParam,
+      style: styleParam,
       id: z.string().describe('The citation ID to update'),
       fields: z.record(z.string(), z.unknown()).describe('Fields to update (e.g., {"url": "https://...", "page": "123"})'),
     }),
@@ -65,6 +67,7 @@ export const writeTools: ToolDefinition[] = [
       'duplicate IDs, and missing issued dates. Returns a list of errors and warnings.',
     inputSchema: z.object({
       file: fileParam,
+      style: styleParam,
     }),
   },
 ];

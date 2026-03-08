@@ -61,9 +61,9 @@ export interface ValidationIssue {
 }
 
 /** Validate required fields for a given CSL type */
-export function validateRequiredFields(entry: CslEntry): ValidationIssue[] {
+export function validateRequiredFields(entry: CslEntry, styleFields?: string[]): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
-  const required = REQUIRED_FIELDS[entry.type];
+  const required = styleFields ?? REQUIRED_FIELDS[entry.type];
   if (!required) return issues;
 
   for (const field of required) {
@@ -81,7 +81,7 @@ export function validateRequiredFields(entry: CslEntry): ValidationIssue[] {
 }
 
 /** Validate an entire bibliography */
-export function validateBibliography(entries: CslEntry[]): ValidationIssue[] {
+export function validateBibliography(entries: CslEntry[], styleFieldsFn?: (type: string) => string[] | undefined): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   const seenIds = new Set<string>();
 
@@ -93,7 +93,8 @@ export function validateBibliography(entries: CslEntry[]): ValidationIssue[] {
     seenIds.add(entry.id);
 
     // Required fields
-    issues.push(...validateRequiredFields(entry));
+    const fields = styleFieldsFn?.(entry.type);
+    issues.push(...validateRequiredFields(entry, fields));
 
     // Missing issued warning
     if (!entry.issued) {
