@@ -19,7 +19,7 @@ const tools: ToolDefinition[] = [
       'Use `registry_path` to save/merge results into a JSON registry file (preserves existing claims and statuses). ' +
       'Workflow: extract → set claims → verify each claim against the source using research tools → update status.',
     inputSchema: z.object({
-      file: z.string().describe('Path to the Markdown file to extract citations from'),
+      file: z.union([z.string(), z.array(z.string())]).describe('Path(s) to Markdown file(s) to extract citations from'),
       registry_path: z.string().optional().describe('Path to save/merge the citation registry JSON file'),
     }),
   },
@@ -98,8 +98,12 @@ class CtverifyProvider implements Provider {
   }
 
   private async handleExtract(args: Record<string, unknown>): Promise<ToolResult> {
-    const { file, registry_path } = args as { file: string; registry_path?: string };
-    const extracted = await extractCitations(file);
+    const { file, registry_path } = args as { file: string | string[]; registry_path?: string };
+    const files = Array.isArray(file) ? file : [file];
+    const extracted: CitationEntry[] = [];
+    for (const f of files) {
+      extracted.push(...await extractCitations(f));
+    }
     if (registry_path) {
       const existing = await this.loadRegistry(registry_path);
       const extractedIds = new Set(extracted.map(e => e.id));
