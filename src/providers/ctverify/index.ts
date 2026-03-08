@@ -55,6 +55,21 @@ const tools: ToolDefinition[] = [
       limit: z.number().optional().default(50).describe('Maximum entries to return (default: 50)'),
     }),
   },
+  {
+    name: 'ctverify:bulk-update',
+    description:
+      'Update status (and optionally note) for multiple citations at once. ' +
+      'Select entries either by a list of IDs or by filter (current status). ' +
+      'At least one of `ids` or `filter_status` must be provided.',
+    inputSchema: z.object({
+      registry_path: z.string().describe('Path to the citation registry JSON file'),
+      ids: z.array(z.string()).optional().describe('List of citation IDs to update'),
+      filter_status: z.enum(['pending', 'under_review', 'verified', 'disputed', 'not_found']).optional()
+        .describe('Update all entries with this current status'),
+      status: z.enum(['pending', 'under_review', 'verified', 'disputed', 'not_found']).describe('New status to set'),
+      note: z.string().optional().describe('Note to set on all matched entries'),
+    }),
+  },
 ];
 
 class CtverifyProvider implements Provider {
@@ -66,6 +81,7 @@ class CtverifyProvider implements Provider {
     switch (toolName) {
       case 'ctverify:extract': return this.handleExtract(args);
       case 'ctverify:update': return this.handleUpdate(args);
+      case 'ctverify:bulk-update': return this.handleBulkUpdate(args);
       case 'ctverify:status': return this.handleStatus(args);
       default: return { content: [{ type: 'text', text: `Unknown tool: ${toolName}` }], isError: true };
     }
@@ -120,6 +136,27 @@ class CtverifyProvider implements Provider {
     if (note !== undefined) entry.note = note;
     await this.saveRegistry(registry_path, entries);
     return { content: [{ type: 'text', text: `Updated ${id}:\n  status: ${entry.status}\n  claim: ${entry.claim}\n  note: ${entry.note}` }] };
+  }
+
+  private async handleBulkUpdate(args: Record<string, unknown>): Promise<ToolResult> {
+    const { registry_path, ids, filter_status, status, note } = args as {
+      registry_path: string; ids?: string[]; filter_status?: string;
+      status: string; note?: string;
+    };
+    if (!ids && !filter_status) {
+      return { content: [{ type: 'text', text: 'Provide at least one of: ids, filter_status' }], isError: true };
+    }
+    const entries = await this.loadRegistry(registry_path);
+    let count = 0;
+    for (const e of entries) {
+      if (ids?.includes(e.id) || (filter_status && e.status === filter_status)) {
+        e.status = status as CitationEntry['status'];
+        if (note !== undefined) e.note = note;
+        count++;
+      }
+    }
+    await this.saveRegistry(registry_path, entries);
+    return { content: [{ type: 'text', text: `✅ ${count} entries updated to "${status}".` }] };
   }
 
   private async handleStatus(args: Record<string, unknown>): Promise<ToolResult> {
