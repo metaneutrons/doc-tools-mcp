@@ -1,12 +1,17 @@
 import { readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { FileError } from '../../shared/errors.js';
+import { rootLogger } from '../../shared/logger.js';
+
+const logger = rootLogger.child({ module: 'csl-style' });
 
 export interface StyleVariables {
   /** Variables used globally (outside any type-conditional) */
   global: Set<string>;
   /** Variables used inside `<if type="...">` / `<else-if type="...">` blocks */
   byType: Map<string, Set<string>>;
+  /** All CSL types referenced in the style */
+  knownTypes: Set<string>;
 }
 
 /** Extract all CSL variables referenced in a .csl style file, grouped by type conditionals */
@@ -16,7 +21,13 @@ export async function parseStyleVariables(stylePath: string): Promise<StyleVaria
   }
 
   const xml = await readFile(stylePath, 'utf-8');
-  return extractVariables(xml);
+  const result = extractVariables(xml);
+  logger.info('Style parsed', {
+    path: stylePath,
+    globalVars: result.global.size,
+    types: result.byType.size,
+  });
+  return result;
 }
 
 /** Get required variables for a specific CSL type from parsed style data */
@@ -38,6 +49,7 @@ const TYPE_CLOSE_RE = /<\/(?:if|choose)>/g;
 function extractVariables(xml: string): StyleVariables {
   const global = new Set<string>();
   const byType = new Map<string, Set<string>>();
+  const knownTypes = new Set<string>();
 
   // Find all type-conditional blocks with their character ranges
   const typeBlocks: Array<{ types: string[]; start: number; end: number }> = [];
@@ -47,7 +59,9 @@ function extractVariables(xml: string): StyleVariables {
   const events: Array<{ pos: number; kind: 'open'; types: string[] } | { pos: number; kind: 'close' }> = [];
 
   for (const m of xml.matchAll(TYPE_OPEN_RE)) {
-    events.push({ pos: m.index!, kind: 'open', types: m[1].split(/\s+/) });
+    const types = m[1].split(/\s+/);
+    types.forEach((t) => knownTypes.add(t));
+    events.push({ pos: m.index!, kind: 'open', types });
   }
   for (const m of xml.matchAll(TYPE_CLOSE_RE)) {
     events.push({ pos: m.index!, kind: 'close' });
@@ -79,5 +93,5 @@ function extractVariables(xml: string): StyleVariables {
     }
   }
 
-  return { global, byType };
+  return { global, byType, knownTypes };
 }

@@ -81,7 +81,7 @@ export function validateRequiredFields(entry: CslEntry, styleFields?: string[]):
 }
 
 /** Validate an entire bibliography */
-export function validateBibliography(entries: CslEntry[], styleFieldsFn?: (type: string) => string[] | undefined): ValidationIssue[] {
+export function validateBibliography(entries: CslEntry[], styleFieldsFn?: (type: string) => string[] | undefined, knownTypes?: Set<string>): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   const seenIds = new Set<string>();
 
@@ -95,6 +95,16 @@ export function validateBibliography(entries: CslEntry[], styleFieldsFn?: (type:
     // Required fields
     const fields = styleFieldsFn?.(entry.type);
     issues.push(...validateRequiredFields(entry, fields));
+
+    // Unknown type warning (when style is available)
+    if (knownTypes && knownTypes.size > 0 && !knownTypes.has(entry.type)) {
+      issues.push({
+        id: entry.id,
+        field: 'type',
+        message: `Type '${entry.type}' is not handled by the CSL style`,
+        severity: 'warning',
+      });
+    }
 
     // Missing issued warning
     if (!entry.issued) {

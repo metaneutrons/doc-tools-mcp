@@ -1,4 +1,5 @@
 import yaml from 'js-yaml';
+import { existsSync } from 'fs';
 import { Provider, ToolDefinition, ToolResult } from '../../shared/types.js';
 import { rootLogger } from '../../shared/logger.js';
 import { NotFoundError, DuplicateError, ValidationError } from '../../shared/errors.js';
@@ -33,15 +34,27 @@ class BibProvider implements Provider {
 
   /** Resolve file path from args or env var */
   private resolveFile(args: Record<string, unknown>): string {
-    const file = (args.file as string | undefined) ?? process.env.DT_BIB_YAML;
+    const fromArgs = args.file as string | undefined;
+    const fromEnv = process.env.DT_BIB_YAML;
+    if (fromEnv && !existsSync(fromEnv)) {
+      logger.warn('DT_BIB_YAML file not found, ignoring', { path: fromEnv });
+    }
+    const file = fromArgs ?? (fromEnv && existsSync(fromEnv) ? fromEnv : undefined);
     if (!file) throw new ValidationError('No bibliography file specified. Set DT_BIB_YAML or pass "file" parameter.');
+    logger.debug('Resolved bibliography file', { path: file, source: fromArgs ? 'args' : 'env' });
     return file;
   }
 
   /** Load style variables from args or env var, returns undefined if no style configured */
   private async resolveStyle(args: Record<string, unknown>): Promise<StyleVariables | undefined> {
-    const stylePath = (args.style as string | undefined) ?? process.env.DT_BIB_CSL;
+    const fromArgs = args.style as string | undefined;
+    const fromEnv = process.env.DT_BIB_CSL;
+    if (fromEnv && !existsSync(fromEnv)) {
+      logger.warn('DT_BIB_CSL file not found, ignoring', { path: fromEnv });
+    }
+    const stylePath = fromArgs ?? (fromEnv && existsSync(fromEnv) ? fromEnv : undefined);
     if (!stylePath) return undefined;
+    logger.debug('Resolved CSL style', { path: stylePath, source: fromArgs ? 'args' : 'env' });
     return parseStyleVariables(stylePath);
   }
 
@@ -52,7 +65,7 @@ class BibProvider implements Provider {
   }
 
   getTools(): ToolDefinition[] {
-    return bibTools;
+    return bibTools();
   }
 
   async handleToolCall(toolName: string, args: Record<string, unknown>): Promise<ToolResult> {
@@ -160,6 +173,9 @@ class BibProvider implements Provider {
     // Required field validation (style-aware if available)
     const styleFields = style ? getRequiredVariables(style, entry.type) : undefined;
     const issues = validateRequiredFields(entry, styleFields);
+    if (style?.knownTypes.size && !style.knownTypes.has(entry.type)) {
+      issues.push({ id: entry.id, field: 'type', message: `Type '${entry.type}' is not handled by the CSL style`, severity: 'warning' });
+    }
     if (issues.some((i) => i.severity === 'error')) {
       const text = 'Validation errors:\n' + issues.map((i) => `- ${i.message}`).join('\n');
       return { content: [{ type: 'text', text }], isError: true };
@@ -184,6 +200,9 @@ class BibProvider implements Provider {
     // Validate updated entry against style if available
     const styleFields = style ? getRequiredVariables(style, updated.type) : undefined;
     const issues = validateRequiredFields(updated, styleFields);
+    if (style?.knownTypes.size && !style.knownTypes.has(updated.type)) {
+      issues.push({ id: updated.id, field: 'type', message: `Type '${updated.type}' is not handled by the CSL style`, severity: 'warning' });
+    }
     const warnings = issues.length > 0
       ? '\n\n⚠️ Warnings:\n' + issues.map((i) => `- ${i.message}`).join('\n')
       : '';
@@ -208,7 +227,7 @@ class BibProvider implements Provider {
     const file = this.resolveFile(args);
     const style = await this.resolveStyle(args);
     const entries = await this.store.read(file);
-    const issues = validateBibliography(entries, this.styleFieldsFn(style));
+    const issues = validateBibliography(entries, this.styleFieldsFn(style), style?.knownTypes);
 
     if (issues.length === 0) {
       return { content: [{ type: 'text', text: `✅ Bibliography is valid. ${entries.length} entries, no issues found.` }] };
