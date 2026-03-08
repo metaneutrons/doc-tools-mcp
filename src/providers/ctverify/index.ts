@@ -45,12 +45,12 @@ const tools: ToolDefinition[] = [
     name: 'ctverify:status',
     description:
       'Show verification progress of a citation registry: counts by status and list of citations. ' +
-      'Use `filter` to focus on specific statuses (e.g., "pending" to see what still needs verification).',
+      'Use `filter_status` to focus on specific statuses, `filter_claim` to search claims or find missing ones.',
     inputSchema: z.object({
       registry_path: z.string().describe('Path to the citation registry JSON file'),
-      filter: z.enum(['pending', 'under_review', 'verified', 'disputed', 'not_found']).optional()
+      filter_status: z.enum(['pending', 'under_review', 'verified', 'disputed', 'not_found']).optional()
         .describe('Only show citations with this status'),
-      file: z.string().optional().describe('Only show citations from this source file'),
+      filter_claim: z.string().optional().describe('Filter by claim: use "" for entries without claims, or any text to search within claims'),
       offset: z.number().optional().default(0).describe('Skip this many entries (for pagination)'),
       limit: z.number().optional().default(50).describe('Maximum entries to return (default: 50)'),
     }),
@@ -164,15 +164,19 @@ class CtverifyProvider implements Provider {
   }
 
   private async handleStatus(args: Record<string, unknown>): Promise<ToolResult> {
-    const { registry_path, filter, file, offset = 0, limit = 50 } = args as {
-      registry_path: string; filter?: string; file?: string; offset?: number; limit?: number;
+    const { registry_path, filter_status, filter_claim, offset = 0, limit = 50 } = args as {
+      registry_path: string; filter_status?: string; filter_claim?: string; offset?: number; limit?: number;
     };
     const entries = await this.loadRegistry(registry_path);
     const counts: Record<string, number> = {};
     for (const e of entries) counts[e.status] = (counts[e.status] || 0) + 1;
     let filtered = entries;
-    if (filter) filtered = filtered.filter(e => e.status === filter);
-    if (file) filtered = filtered.filter(e => e.file.includes(file));
+    if (filter_status) filtered = filtered.filter(e => e.status === filter_status);
+    if (filter_claim !== undefined) {
+      filtered = filter_claim === ''
+        ? filtered.filter(e => !e.claim)
+        : filtered.filter(e => e.claim.toLowerCase().includes(filter_claim.toLowerCase()));
+    }
     const total = filtered.length;
     const paged = filtered.slice(offset, offset + limit);
     const summary = Object.entries(counts).map(([s, n]) => `${s}: ${n}`).join(', ');
