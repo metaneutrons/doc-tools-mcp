@@ -1,81 +1,107 @@
 import { readFile, writeFile, mkdir } from 'fs/promises';
+import { existsSync } from 'fs';
 import { dirname } from 'path';
 import { Provider, ToolDefinition, ToolResult } from '../../shared/types.js';
+import { rootLogger } from '../../shared/logger.js';
+import { ValidationError } from '../../shared/errors.js';
 import { extractCitations } from './extract.js';
 import type { CitationEntry } from './types.js';
 import { z } from 'zod';
+
+const logger = rootLogger.child({ module: 'ctverify' });
 
 export function createProvider(): Provider | null {
   return new CtverifyProvider();
 }
 
-const tools: ToolDefinition[] = [
-  {
-    name: 'ctverify:extract',
-    description:
-      'Extract citations from Pandoc inline footnotes (^[...]) for verification tracking. ' +
-      'This is a CITATION VERIFICATION tool, not bibliography management. It extracts citations so the LLM can systematically verify ' +
-      'that each cited source actually supports the claim made in the text. ' +
-      'Use `registry_path` to save/merge results into a JSON registry file (preserves existing claims and statuses). ' +
-      'Workflow: extract → set claims → verify each claim against the source using research tools → update status.',
-    inputSchema: z.object({
-      file: z.union([z.string(), z.array(z.string())]).describe('Single path or array of paths to Markdown files to extract citations from'),
-      registry_path: z.string().optional().describe('Path to save/merge the citation registry JSON file'),
-    }),
-  },
-  {
-    name: 'ctverify:update',
-    description:
-      'Update or add a citation verification entry. ' +
-      'The `claim` field records WHAT the text asserts at this citation point. ' +
-      'The `status` tracks verification progress: pending → under_review → verified/disputed/not_found. ' +
-      'If the ID does not exist and `cite` is provided, creates a new entry (for inline citations not in footnotes).',
-    inputSchema: z.object({
-      registry_path: z.string().describe('Path to the citation registry JSON file'),
-      id: z.string().describe('Citation ID (format: "filename:line:index")'),
-      cite: z.string().optional().describe('Raw citation text (required when adding a new entry)'),
-      file: z.string().optional().describe('Source file path (for new entries)'),
-      line: z.number().optional().describe('Line number in source file (for new entries)'),
-      claim: z.string().optional().describe('What the text asserts at this citation'),
-      status: z.enum(['pending', 'under_review', 'verified', 'disputed', 'not_found']).optional(),
-      note: z.string().optional().describe('Free text notes from verification'),
-    }),
-  },
-  {
-    name: 'ctverify:status',
-    description:
-      'Show verification progress of a citation registry: counts by status and list of citations. ' +
-      'Use `filter_status` to focus on specific statuses, `filter_claim` to search claims or find missing ones.',
-    inputSchema: z.object({
-      registry_path: z.string().describe('Path to the citation registry JSON file'),
-      filter_status: z.enum(['pending', 'under_review', 'verified', 'disputed', 'not_found']).optional()
-        .describe('Only show citations with this status'),
-      filter_claim: z.string().optional().describe('Filter by claim: use "" for entries without claims, or any text to search within claims'),
-      offset: z.number().optional().default(0).describe('Skip this many entries (for pagination)'),
-      limit: z.number().optional().default(50).describe('Maximum entries to return (default: 50)'),
-    }),
-  },
-  {
-    name: 'ctverify:bulk-update',
-    description:
-      'Update status (and optionally note) for multiple citations at once. ' +
-      'Select entries either by a list of IDs or by filter (current status). ' +
-      'At least one of `ids` or `filter_status` must be provided.',
-    inputSchema: z.object({
-      registry_path: z.string().describe('Path to the citation registry JSON file'),
-      ids: z.array(z.string()).optional().describe('List of citation IDs to update'),
-      filter_status: z.enum(['pending', 'under_review', 'verified', 'disputed', 'not_found']).optional()
-        .describe('Update all entries with this current status'),
-      status: z.enum(['pending', 'under_review', 'verified', 'disputed', 'not_found']).describe('New status to set'),
-      note: z.string().optional().describe('Note to set on all matched entries'),
-    }),
-  },
-];
+function registryParam() {
+  const env = process.env.DT_CT_REGISTRY;
+  const valid = env && existsSync(env);
+  return valid
+    ? z.string().optional().describe(`Path to citation registry JSON file. Defaults to "${env}" (DT_CT_REGISTRY).`)
+    : z.string().describe('Path to the citation registry JSON file (required). Set DT_CT_REGISTRY env var to make optional.');
+}
+
+function buildTools(): ToolDefinition[] {
+  return [
+    {
+      name: 'ctverify:extract',
+      description:
+        'Extract citations from Pandoc inline footnotes (^[...]) for verification tracking. ' +
+        'This is a CITATION VERIFICATION tool, not bibliography management. It extracts citations so the LLM can systematically verify ' +
+        'that each cited source actually supports the claim made in the text. ' +
+        'Use `registry_path` to save/merge results into a JSON registry file (preserves existing claims and statuses). ' +
+        'Workflow: extract → set claims → verify each claim against the source using research tools → update status.',
+      inputSchema: z.object({
+        file: z.union([z.string(), z.array(z.string())]).describe('Single path or array of paths to Markdown files to extract citations from'),
+        registry_path: registryParam(),
+      }),
+    },
+    {
+      name: 'ctverify:update',
+      description:
+        'Update or add a citation verification entry. ' +
+        'The `claim` field records WHAT the text asserts at this citation point. ' +
+        'The `status` tracks verification progress: pending → under_review → verified/disputed/not_found. ' +
+        'If the ID does not exist and `cite` is provided, creates a new entry (for inline citations not in footnotes).',
+      inputSchema: z.object({
+        registry_path: registryParam(),
+        id: z.string().describe('Citation ID (format: "filename:line:index")'),
+        cite: z.string().optional().describe('Raw citation text (required when adding a new entry)'),
+        file: z.string().optional().describe('Source file path (for new entries)'),
+        line: z.number().optional().describe('Line number in source file (for new entries)'),
+        claim: z.string().optional().describe('What the text asserts at this citation'),
+        status: z.enum(['pending', 'under_review', 'verified', 'disputed', 'not_found']).optional(),
+        note: z.string().optional().describe('Free text notes from verification'),
+      }),
+    },
+    {
+      name: 'ctverify:status',
+      description:
+        'Show verification progress of a citation registry: counts by status and list of citations. ' +
+        'Use `filter_status` to focus on specific statuses, `filter_claim` to search claims or find missing ones.',
+      inputSchema: z.object({
+        registry_path: registryParam(),
+        filter_status: z.enum(['pending', 'under_review', 'verified', 'disputed', 'not_found']).optional()
+          .describe('Only show citations with this status'),
+        filter_claim: z.string().optional().describe('Filter by claim: use "" for entries without claims, or any text to search within claims'),
+        offset: z.number().optional().default(0).describe('Skip this many entries (for pagination)'),
+        limit: z.number().optional().default(50).describe('Maximum entries to return (default: 50)'),
+      }),
+    },
+    {
+      name: 'ctverify:bulk-update',
+      description:
+        'Update status (and optionally note) for multiple citations at once. ' +
+        'Select entries either by a list of IDs or by filter (current status). ' +
+        'At least one of `ids` or `filter_status` must be provided.',
+      inputSchema: z.object({
+        registry_path: registryParam(),
+        ids: z.array(z.string()).optional().describe('List of citation IDs to update'),
+        filter_status: z.enum(['pending', 'under_review', 'verified', 'disputed', 'not_found']).optional()
+          .describe('Update all entries with this current status'),
+        status: z.enum(['pending', 'under_review', 'verified', 'disputed', 'not_found']).describe('New status to set'),
+        note: z.string().optional().describe('Note to set on all matched entries'),
+      }),
+    },
+  ];
+}
 
 class CtverifyProvider implements Provider {
   readonly name = 'ctverify';
-  getTools(): ToolDefinition[] { return tools; }
+  getTools(): ToolDefinition[] { return buildTools(); }
   async shutdown(): Promise<void> {}
+
+  private resolveRegistry(args: Record<string, unknown>): string {
+    const fromArgs = args.registry_path as string | undefined;
+    const fromEnv = process.env.DT_CT_REGISTRY;
+    if (fromEnv && !existsSync(fromEnv)) {
+      logger.warn('DT_CT_REGISTRY file not found, ignoring', { path: fromEnv });
+    }
+    const path = fromArgs ?? (fromEnv && existsSync(fromEnv) ? fromEnv : undefined);
+    if (!path) throw new ValidationError('No registry path specified. Set DT_CT_REGISTRY or pass "registry_path" parameter.');
+    return path;
+  }
 
   async handleToolCall(toolName: string, args: Record<string, unknown>): Promise<ToolResult> {
     switch (toolName) {
@@ -98,7 +124,8 @@ class CtverifyProvider implements Provider {
   }
 
   private async handleExtract(args: Record<string, unknown>): Promise<ToolResult> {
-    const { file, registry_path } = args as { file: string | string[]; registry_path?: string };
+    const { file } = args as { file: string | string[] };
+    const registry_path = args.registry_path as string | undefined ?? (process.env.DT_CT_REGISTRY && existsSync(process.env.DT_CT_REGISTRY) ? process.env.DT_CT_REGISTRY : undefined);
     const files = Array.isArray(file) ? file : [file];
     const extracted: CitationEntry[] = [];
     for (const f of files) {
@@ -124,8 +151,9 @@ class CtverifyProvider implements Provider {
   }
 
   private async handleUpdate(args: Record<string, unknown>): Promise<ToolResult> {
-    const { registry_path, id, cite, file, line, claim, status, note } = args as {
-      registry_path: string; id: string; cite?: string; file?: string; line?: number;
+    const registry_path = this.resolveRegistry(args);
+    const { id, cite, file, line, claim, status, note } = args as {
+      id: string; cite?: string; file?: string; line?: number;
       claim?: string; status?: string; note?: string;
     };
     const entries = await this.loadRegistry(registry_path);
@@ -143,8 +171,9 @@ class CtverifyProvider implements Provider {
   }
 
   private async handleBulkUpdate(args: Record<string, unknown>): Promise<ToolResult> {
-    const { registry_path, ids, filter_status, status, note } = args as {
-      registry_path: string; ids?: string[]; filter_status?: string;
+    const registry_path = this.resolveRegistry(args);
+    const { ids, filter_status, status, note } = args as {
+      ids?: string[]; filter_status?: string;
       status: string; note?: string;
     };
     if (!ids && !filter_status) {
@@ -164,8 +193,9 @@ class CtverifyProvider implements Provider {
   }
 
   private async handleStatus(args: Record<string, unknown>): Promise<ToolResult> {
-    const { registry_path, filter_status, filter_claim, offset = 0, limit = 50 } = args as {
-      registry_path: string; filter_status?: string; filter_claim?: string; offset?: number; limit?: number;
+    const registry_path = this.resolveRegistry(args);
+    const { filter_status, filter_claim, offset = 0, limit = 50 } = args as {
+      filter_status?: string; filter_claim?: string; offset?: number; limit?: number;
     };
     const entries = await this.loadRegistry(registry_path);
     const counts: Record<string, number> = {};
