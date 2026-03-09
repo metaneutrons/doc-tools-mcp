@@ -9,7 +9,7 @@
 
 > **⚠️ Work in Progress** — APIs may change without notice.
 
-A [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) server for managing [pandoc](https://pandoc.org/)/CSL-YAML bibliographies. Lets your LLM read, search, add, update, delete, and validate citation entries directly.
+A [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) server for managing [pandoc](https://pandoc.org/)/CSL-YAML bibliographies and verifying citations. Lets your LLM read, search, add, update, delete, validate bibliography entries, and systematically verify that citations support the claims made in your text.
 
 ## Quick Start
 
@@ -24,16 +24,28 @@ Add to your MCP client config (e.g., `claude_desktop_config.json`):
   "mcpServers": {
     "doc-tools": {
       "command": "npx",
-      "args": ["-y", "@metaneutrons/doc-tools-mcp"]
+      "args": ["-y", "@metaneutrons/doc-tools-mcp"],
+      "env": {
+        "DT_BIB_YAML": "/path/to/references.yaml",
+        "DT_BIB_CSL": "/path/to/style.csl",
+        "DT_CT_REGISTRY": "/path/to/ctverify.json"
+      }
     }
   }
 }
 ```
 
-> All `bib:*` tools take a `file` parameter — the path to your CSL-YAML bibliography file.
-> The LLM discovers this automatically from `bibliography:` in `pandoc.yaml` or the YAML frontmatter of your `.md` files.
+## Environment Variables
 
-## Tools
+| Variable | Description |
+|----------|-------------|
+| `DT_BIB_YAML` | Default path to CSL-YAML bibliography file. Makes `file` param optional on all `bib:*` tools. |
+| `DT_BIB_CSL` | Default path to CSL style file (.csl). Enables style-aware field validation on `bib:validate`, `bib:add`, `bib:update`. |
+| `DT_CT_REGISTRY` | Default path to citation verification registry JSON. Makes `registry_path` optional on all `ctverify:*` tools. |
+
+All env vars are ignored if the referenced file does not exist. Tool descriptions adapt dynamically to show configured defaults.
+
+## Bibliography Tools (`bib:*`)
 
 ### Read
 
@@ -49,7 +61,7 @@ Add to your MCP client config (e.g., `claude_desktop_config.json`):
 
 | Tool | Description |
 |------|-------------|
-| `bib:add` | Add a new entry with duplicate ID check, required field validation per CSL type, and YAML confirmation output |
+| `bib:add` | Add a new entry with duplicate ID check, required field validation, and YAML confirmation output |
 | `bib:update` | Patch individual fields of an existing entry (other fields remain untouched) |
 | `bib:delete` | Remove an entry by ID |
 
@@ -61,9 +73,11 @@ Add to your MCP client config (e.g., `claude_desktop_config.json`):
 
 All write operations automatically create a `.bak` backup before modifying the file.
 
-## Supported CSL Types
+### CSL Style Validation
 
-Required field validation is provided for these types:
+When a CSL style file is configured (via `DT_BIB_CSL` or the `style` parameter), validation uses the variables actually referenced in the style instead of hardcoded required fields. Entry types not handled by the style produce a warning.
+
+Without a style file, these hardcoded defaults apply:
 
 | Type | Required Fields |
 |------|----------------|
@@ -74,23 +88,41 @@ Required field validation is provided for these types:
 | `legislation` | `title`, `issued` |
 | `thesis` | `title`, `issued` |
 
-Other types are accepted without required field validation.
+## Citation Verification Tools (`ctverify:*`)
+
+Systematic verification that cited sources actually support the claims made in the text.
+
+**Workflow:** extract → set claims → verify each claim against the source → update status.
+
+| Tool | Description |
+|------|-------------|
+| `ctverify:extract` | Extract citations from Pandoc inline footnotes (`^[...]`). Accepts single file or array of files. Merges into registry preserving existing claims and statuses. |
+| `ctverify:update` | Update or add a single citation entry: set `claim`, `status`, `note`. Creates new entries when `cite` is provided. |
+| `ctverify:bulk-update` | Batch status update by ID list or `filter_status`. |
+| `ctverify:status` | Show verification progress with counts. Filter by `filter_status` or `filter_claim` (use `""` for missing claims). |
+
+The registry matches entries by file + citation text, so verification data survives when line numbers shift after edits.
 
 ## Architecture
 
 ```
 src/
-├── index.ts                    # MCP server with dynamic provider loading
+├── index.ts                    # MCP server, dynamic provider loading, stdio transport
 ├── shared/
-│   ├── types.ts                # Provider interface, ToolDefinition, ToolResult
+│   ├── types.ts                # Provider, ToolDefinition, ToolResult interfaces
 │   ├── logger.ts               # Structured logging (pino → stderr)
 │   └── errors.ts               # Typed error hierarchy
 └── providers/
-    └── bib/                    # Bibliography provider
-        ├── index.ts            # Provider implementation (9 tool handlers)
-        ├── store.ts            # YAML read/write with .bak backup
-        ├── schema.ts           # Zod schemas + per-type field validation
-        └── tools/              # Tool definitions (read + write)
+    ├── bib/                    # Bibliography provider
+    │   ├── index.ts            # BibProvider (9 tool handlers, env var resolution)
+    │   ├── store.ts            # YAML read/write with .bak backup
+    │   ├── schema.ts           # Zod schemas + per-type field validation
+    │   ├── csl-style.ts        # CSL style parser (variable extraction per type)
+    │   └── tools/              # Dynamic tool definitions (read + write)
+    └── ctverify/               # Citation verification provider
+        ├── index.ts            # CtverifyProvider (4 tool handlers)
+        ├── extract.ts          # Pandoc inline footnote parser
+        └── types.ts            # CitationEntry interface
 ```
 
 The provider system is extensible — add a new directory under `src/providers/` with a `createProvider()` export and it will be auto-discovered at startup.
@@ -111,7 +143,7 @@ npm run lint          # ESLint
 This repo uses [Conventional Commits](https://www.conventionalcommits.org/) enforced via Husky + commitlint.
 
 **Types:** `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `chore`, `ci`, `build`, `revert`
-**Scopes:** `bib`, `core`, `deps`, `config`
+**Scopes:** `bib`, `ctverify`, `core`, `deps`, `config`
 
 ## License
 
