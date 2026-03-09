@@ -144,10 +144,12 @@ class CtverifyProvider implements Provider {
         }),
       ];
       await this.saveRegistry(registry_path, merged);
-      const newCount = extracted.filter(e => !byCite.has(`${e.file}\0${e.cite}`)).length;
-      return { content: [{ type: 'text', text: `${extracted.length} citations extracted, ${newCount} new. Registry: ${registry_path}\n\n${this.formatEntries(merged)}` }] };
+      const newEntries = extracted.filter(e => !byCite.has(`${e.file}\0${e.cite}`));
+      const summary = `${extracted.length} citations extracted, ${newEntries.length} new. Registry: ${registry_path} (${merged.length} total)`;
+      const detail = newEntries.length > 0 ? `\n\nNew:\n${newEntries.map(e => `- ${e.id}: ${e.cite}`).join('\n')}` : '';
+      return { content: [{ type: 'text', text: `${summary}${detail}\n\nUse ctverify:status for full overview.` }] };
     }
-    return { content: [{ type: 'text', text: `${extracted.length} citations:\n\n${this.formatEntries(extracted)}` }] };
+    return { content: [{ type: 'text', text: `${extracted.length} citations extracted.\n\n${extracted.map(e => `- ${e.id}: ${e.cite}`).join('\n')}` }] };
   }
 
   private async handleUpdate(args: Record<string, unknown>): Promise<ToolResult> {
