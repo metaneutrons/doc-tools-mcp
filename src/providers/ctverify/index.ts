@@ -213,12 +213,8 @@ class CtverifyProvider implements Provider {
     const paged = filtered.slice(offset, offset + limit);
     const summary = Object.entries(counts).map(([s, n]) => `${s}: ${n}`).join(', ');
     const range = total > paged.length ? ` (showing ${offset + 1}–${offset + paged.length} of ${total})` : '';
-    return { content: [{ type: 'text', text: `${entries.length} total (${summary})${range}\n\n${this.formatEntries(paged)}` }] };
+    const lines = paged.map(e => `[${e.status}] ${e.id}: ${e.cite}${e.claim ? ' → ' + e.claim : ''}`).join('\n');
+    return { content: [{ type: 'text', text: `${entries.length} total (${summary})${range}\n\n${lines}` }] };
   }
 
-  private formatEntries(entries: CitationEntry[]): string {
-    return entries.map(e =>
-      `[${e.status}] ${e.id}\n  ${e.cite}${e.claim ? `\n  → ${e.claim}` : ''}${e.note ? `\n  note: ${e.note}` : ''}`
-    ).join('\n\n');
-  }
 }
