@@ -34,6 +34,7 @@ export async function extractCitations(filePath: string): Promise<CitationEntry[
       if (end === -1) { pos = start + 2; continue; }
 
       const footnote = line.substring(start + 2, end);
+      const context = line.substring(Math.max(0, start - 200), start).trim();
       // Split by semicolons (but not inside nested brackets/parens)
       const cites = splitCites(footnote);
 
@@ -45,6 +46,7 @@ export async function extractCitations(filePath: string): Promise<CitationEntry[
           file: filePath,
           line: i + 1,
           cite,
+          context,
           claim: '',
           status: 'pending',
           note: '',

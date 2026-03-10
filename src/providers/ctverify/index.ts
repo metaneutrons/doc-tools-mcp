@@ -31,28 +31,33 @@ function buildTools(): ToolDefinition[] {
         'This is a CITATION VERIFICATION tool, not bibliography management. It extracts citations so the LLM can systematically verify ' +
         'that each cited source actually supports the claim made in the text. ' +
         'Use `registry_path` to save/merge results into a JSON registry file (preserves existing claims and statuses). ' +
+        'Re-running after text edits is safe: exact cite matches preserve claims/status, proximity matching (±5 lines) recovers claims when cite text changed. ' +
+        'Each citation captures ~200 chars of surrounding context for claim formulation. ' +
         'Workflow: extract → set claims → verify each claim against the source using research tools → update status.',
       inputSchema: z.object({
         file: z.union([z.string(), z.array(z.string())]).describe('Single path or array of paths to Markdown files to extract citations from'),
         registry_path: registryParam(),
+        dry_run: z.boolean().optional().default(false).describe('Preview merge result without writing. Use after text edits to check which citations are new, removed, or proximity-matched before committing.'),
       }),
     },
     {
       name: 'ctverify:update',
       description:
-        'Update or add a citation verification entry. ' +
+        'Batch update citation verification entries. Each entry can set claim, status, and/or note independently. ' +
         'The `claim` field records WHAT the text asserts at this citation point. ' +
         'The `status` tracks verification progress: pending → under_review → verified/disputed/not_found. ' +
-        'If the ID does not exist and `cite` is provided, creates a new entry (for inline citations not in footnotes).',
+        'If an ID does not exist and `cite` is provided, creates a new entry (for inline citations not in footnotes).',
       inputSchema: z.object({
         registry_path: registryParam(),
-        id: z.string().describe('Citation ID (format: "filename:line:index")'),
-        cite: z.string().optional().describe('Raw citation text (required when adding a new entry)'),
-        file: z.string().optional().describe('Source file path (for new entries)'),
-        line: z.number().optional().describe('Line number in source file (for new entries)'),
-        claim: z.string().optional().describe('What the text asserts at this citation'),
-        status: z.enum(['pending', 'under_review', 'verified', 'disputed', 'not_found']).optional(),
-        note: z.string().optional().describe('Free text notes from verification'),
+        entries: z.array(z.object({
+          id: z.string().describe('Citation ID (format: "filename:line:index")'),
+          cite: z.string().optional().describe('Raw citation text (required when adding a new entry)'),
+          file: z.string().optional().describe('Source file path (for new entries)'),
+          line: z.number().optional().describe('Line number in source file (for new entries)'),
+          claim: z.string().optional().describe('What the text asserts at this citation'),
+          status: z.enum(['pending', 'under_review', 'verified', 'disputed', 'not_found']).optional(),
+          note: z.string().optional().describe('Free text notes from verification'),
+        })).describe('Array of entries to update'),
       }),
     },
     {
@@ -65,6 +70,7 @@ function buildTools(): ToolDefinition[] {
         filter_status: z.enum(['pending', 'under_review', 'verified', 'disputed', 'not_found']).optional()
           .describe('Only show citations with this status'),
         filter_claim: z.string().optional().describe('Filter by claim: use "" for entries without claims, or any text to search within claims'),
+        file: z.string().optional().describe('Only show citations from this source file (matches basename or path suffix, e.g. "40-02.md")'),
         offset: z.number().optional().default(0).describe('Skip this many entries (for pagination)'),
         limit: z.number().optional().default(50).describe('Maximum entries to return (default: 50)'),
       }),
@@ -124,7 +130,7 @@ class CtverifyProvider implements Provider {
   }
 
   private async handleExtract(args: Record<string, unknown>): Promise<ToolResult> {
-    const { file } = args as { file: string | string[] };
+    const { file, dry_run = false } = args as { file: string | string[]; dry_run?: boolean };
     const registry_path = args.registry_path as string | undefined ?? (process.env.DT_CT_REGISTRY && existsSync(process.env.DT_CT_REGISTRY) ? process.env.DT_CT_REGISTRY : undefined);
     const files = Array.isArray(file) ? file : [file];
     const extracted: CitationEntry[] = [];
@@ -133,43 +139,70 @@ class CtverifyProvider implements Provider {
     }
     if (registry_path) {
       const existing = await this.loadRegistry(registry_path);
-      const extractedIds = new Set(extracted.map(e => e.id));
-      // Match by file+cite text to survive line number changes
-      const byCite = new Map(existing.map(e => [`${e.file}\0${e.cite}`, e]));
-      const merged = [
-        ...existing.filter(e => !extractedIds.has(e.id) && !extracted.some(x => x.file === e.file && x.cite === e.cite)),
-        ...extracted.map(e => {
-          const prev = byCite.get(`${e.file}\0${e.cite}`);
-          return prev ? { ...e, claim: prev.claim, status: prev.status, note: prev.note } : e;
-        }),
-      ];
-      await this.saveRegistry(registry_path, merged);
-      const newEntries = extracted.filter(e => !byCite.has(`${e.file}\0${e.cite}`));
-      const summary = `${extracted.length} citations extracted, ${newEntries.length} new. Registry: ${registry_path} (${merged.length} total)`;
-      const detail = newEntries.length > 0 ? `\n\nNew:\n${newEntries.map(e => `- ${e.id}: ${e.cite}`).join('\n')}` : '';
-      return { content: [{ type: 'text', text: `${summary}${detail}\n\nUse ctverify:status for full overview.` }] };
+      const extractedFiles = new Set(extracted.map(e => e.file));
+      // Existing entries from OTHER files (untouched)
+      const untouched = existing.filter(e => !extractedFiles.has(e.file));
+      // Existing entries from extracted files (candidates for matching)
+      const candidates = existing.filter(e => extractedFiles.has(e.file));
+      // Phase 1: exact cite match
+      const byCite = new Map(candidates.map(e => [`${e.file}\0${e.cite}`, e]));
+      const matched = new Set<string>();
+      const merged = extracted.map(e => {
+        const key = `${e.file}\0${e.cite}`;
+        const prev = byCite.get(key);
+        if (prev) { matched.add(prev.id); return { ...e, claim: prev.claim, status: prev.status, note: prev.note }; }
+        return e;
+      });
+      // Phase 2: proximity match for unmatched (same file, closest line)
+      const unusedCandidates = candidates.filter(c => !matched.has(c.id));
+      for (const entry of merged) {
+        if (byCite.has(`${entry.file}\0${entry.cite}`)) continue; // already matched
+        const closest = unusedCandidates
+          .filter(c => c.file === entry.file && c.claim)
+          .sort((a, b) => Math.abs(a.line - entry.line) - Math.abs(b.line - entry.line))[0];
+        if (closest && Math.abs(closest.line - entry.line) <= 5) {
+          entry.claim = closest.claim;
+          entry.status = closest.status;
+          entry.note = closest.note;
+          matched.add(closest.id);
+          unusedCandidates.splice(unusedCandidates.indexOf(closest), 1);
+        }
+      }
+      const removed = candidates.filter(c => !matched.has(c.id));
+      const newEntries = merged.filter(e => !candidates.some(c => c.id === e.id) && !e.claim);
+      const final = [...untouched, ...merged];
+      if (!dry_run) await this.saveRegistry(registry_path, final);
+      const lines: string[] = [`${extracted.length} citations extracted${dry_run ? ' (dry run)' : ''}, registry: ${final.length} total`];
+      if (newEntries.length) lines.push(`\nNew (${newEntries.length}):\n${newEntries.map(e => `+ ${e.id}: ${e.cite}`).join('\n')}`);
+      if (removed.length) lines.push(`\nRemoved (${removed.length}):\n${removed.map(e => `- ${e.id}: ${e.cite}`).join('\n')}`);
+      const proximityMatched = merged.filter(e => !byCite.has(`${e.file}\0${e.cite}`) && e.claim);
+      if (proximityMatched.length) lines.push(`\nProximity-matched (${proximityMatched.length}):\n${proximityMatched.map(e => `~ ${e.id}: ${e.cite} → claim: ${e.claim}`).join('\n')}`);
+      return { content: [{ type: 'text', text: lines.join('\n') }] };
     }
     return { content: [{ type: 'text', text: `${extracted.length} citations extracted.\n\n${extracted.map(e => `- ${e.id}: ${e.cite}`).join('\n')}` }] };
   }
 
   private async handleUpdate(args: Record<string, unknown>): Promise<ToolResult> {
     const registry_path = this.resolveRegistry(args);
-    const { id, cite, file, line, claim, status, note } = args as {
-      id: string; cite?: string; file?: string; line?: number;
-      claim?: string; status?: string; note?: string;
+    const { entries: inputEntries } = args as {
+      entries: Array<{ id: string; cite?: string; file?: string; line?: number; claim?: string; status?: string; note?: string }>;
     };
     const entries = await this.loadRegistry(registry_path);
-    let entry = entries.find(e => e.id === id);
-    if (!entry) {
-      if (!cite) return { content: [{ type: 'text', text: `Citation ${id} not found. Provide 'cite' to create a new entry.` }], isError: true };
-      entry = { id, file: file ?? '', line: line ?? 0, cite, claim: '', status: 'pending', note: '' };
-      entries.push(entry);
+    const results: string[] = [];
+    for (const input of inputEntries) {
+      let entry = entries.find(e => e.id === input.id);
+      if (!entry) {
+        if (!input.cite) { results.push(`✗ ${input.id}: not found (provide 'cite' to create)`); continue; }
+        entry = { id: input.id, file: input.file ?? '', line: input.line ?? 0, cite: input.cite, context: '', claim: '', status: 'pending', note: '' };
+        entries.push(entry);
+      }
+      if (input.claim !== undefined) entry.claim = input.claim;
+      if (input.status !== undefined) entry.status = input.status as CitationEntry['status'];
+      if (input.note !== undefined) entry.note = input.note;
+      results.push(`✓ ${input.id}: ${entry.status}${input.claim !== undefined ? ' | claim set' : ''}`);
     }
-    if (claim !== undefined) entry.claim = claim;
-    if (status !== undefined) entry.status = status as CitationEntry['status'];
-    if (note !== undefined) entry.note = note;
     await this.saveRegistry(registry_path, entries);
-    return { content: [{ type: 'text', text: `Updated ${id}:\n  status: ${entry.status}\n  claim: ${entry.claim}\n  note: ${entry.note}` }] };
+    return { content: [{ type: 'text', text: `${results.length} entries processed:\n${results.join('\n')}` }] };
   }
 
   private async handleBulkUpdate(args: Record<string, unknown>): Promise<ToolResult> {
@@ -196,13 +229,14 @@ class CtverifyProvider implements Provider {
 
   private async handleStatus(args: Record<string, unknown>): Promise<ToolResult> {
     const registry_path = this.resolveRegistry(args);
-    const { filter_status, filter_claim, offset = 0, limit = 50 } = args as {
-      filter_status?: string; filter_claim?: string; offset?: number; limit?: number;
+    const { filter_status, filter_claim, file, offset = 0, limit = 50 } = args as {
+      filter_status?: string; filter_claim?: string; file?: string; offset?: number; limit?: number;
     };
     const entries = await this.loadRegistry(registry_path);
     const counts: Record<string, number> = {};
     for (const e of entries) counts[e.status] = (counts[e.status] || 0) + 1;
     let filtered = entries;
+    if (file) filtered = filtered.filter(e => e.file.endsWith(file) || e.id.startsWith(file.replace(/\.md$/, '')));
     if (filter_status) filtered = filtered.filter(e => e.status === filter_status);
     if (filter_claim !== undefined) {
       filtered = filter_claim === ''

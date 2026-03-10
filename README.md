@@ -96,12 +96,18 @@ Systematic verification that cited sources actually support the claims made in t
 
 | Tool | Description |
 |------|-------------|
-| `ctverify:extract` | Extract citations from Pandoc inline footnotes (`^[...]`). Accepts single file or array of files. Merges into registry preserving existing claims and statuses. |
-| `ctverify:update` | Update or add a single citation entry: set `claim`, `status`, `note`. Creates new entries when `cite` is provided. |
+| `ctverify:extract` | Extract citations from Pandoc inline footnotes (`^[...]`). Captures ~200 chars of context before each footnote. Merges into registry preserving existing claims/statuses. Supports `dry_run` to preview changes after text edits. |
+| `ctverify:update` | Batch update citation entries: set `claim`, `status`, `note` per entry via `entries` array. Creates new entries when `cite` is provided. |
 | `ctverify:bulk-update` | Batch status update by ID list or `filter_status`. |
-| `ctverify:status` | Show verification progress with counts. Filter by `filter_status` or `filter_claim` (use `""` for missing claims). |
+| `ctverify:status` | Show verification progress with counts. Filter by `filter_status`, `filter_claim` (use `""` for missing claims), or `file` (basename/suffix match). |
 
-The registry matches entries by file + citation text, so verification data survives when line numbers shift after edits.
+### Re-sync after edits
+
+Re-running `ctverify:extract` after text changes is safe:
+
+1. **Exact match** — citations with unchanged text keep their claims and status
+2. **Proximity match** — if cite text changed but the position is within ±5 lines, claims are recovered from the nearest previous entry
+3. **`dry_run: true`** — preview new, removed, and proximity-matched entries before committing
 
 ## Architecture
 
