@@ -71,8 +71,17 @@ function buildTools(): ToolDefinition[] {
           .describe('Only show citations with this status'),
         filter_claim: z.string().optional().describe('Filter by claim: use "" for entries without claims, or any text to search within claims'),
         file: z.string().optional().describe('Only show citations from this source file (matches basename or path suffix, e.g. "40-02.md")'),
+        ids: z.array(z.string()).optional().describe('Only show these specific citation IDs'),
         offset: z.number().optional().default(0).describe('Skip this many entries (for pagination)'),
         limit: z.number().optional().default(50).describe('Maximum entries to return (default: 50)'),
+      }),
+    },
+    {
+      name: 'ctverify:get',
+      description: 'Retrieve one or more citation entries by ID. Returns full details including cite, context, claim, status, and note.',
+      inputSchema: z.object({
+        registry_path: registryParam(),
+        ids: z.array(z.string()).describe('Citation IDs to retrieve (format: "filename:line:index")'),
       }),
     },
     {
@@ -113,6 +122,7 @@ class CtverifyProvider implements Provider {
     switch (toolName) {
       case 'ctverify:extract': return this.handleExtract(args);
       case 'ctverify:update': return this.handleUpdate(args);
+      case 'ctverify:get': return this.handleGet(args);
       case 'ctverify:bulk-update': return this.handleBulkUpdate(args);
       case 'ctverify:status': return this.handleStatus(args);
       default: return { content: [{ type: 'text', text: `Unknown tool: ${toolName}` }], isError: true };
@@ -205,6 +215,17 @@ class CtverifyProvider implements Provider {
     return { content: [{ type: 'text', text: `${results.length} entries processed:\n${results.join('\n')}` }] };
   }
 
+  private async handleGet(args: Record<string, unknown>): Promise<ToolResult> {
+    const registry_path = this.resolveRegistry(args);
+    const { ids } = args as { ids: string[] };
+    const entries = await this.loadRegistry(registry_path);
+    const idSet = new Set(ids);
+    const found = entries.filter(e => idSet.has(e.id));
+    if (found.length === 0) return { content: [{ type: 'text', text: `No entries found for: ${ids.join(', ')}` }], isError: true };
+    const lines = found.map(e => `${e.id} [${e.status}]\n  cite: ${e.cite}\n  context: ${e.context || '(none)'}\n  claim: ${e.claim || '(none)'}\n  note: ${e.note || '(none)'}`);
+    return { content: [{ type: 'text', text: lines.join('\n\n') }] };
+  }
+
   private async handleBulkUpdate(args: Record<string, unknown>): Promise<ToolResult> {
     const registry_path = this.resolveRegistry(args);
     const { ids, filter_status, status, note } = args as {
@@ -229,13 +250,14 @@ class CtverifyProvider implements Provider {
 
   private async handleStatus(args: Record<string, unknown>): Promise<ToolResult> {
     const registry_path = this.resolveRegistry(args);
-    const { filter_status, filter_claim, file, offset = 0, limit = 50 } = args as {
-      filter_status?: string; filter_claim?: string; file?: string; offset?: number; limit?: number;
+    const { filter_status, filter_claim, file, ids, offset = 0, limit = 50 } = args as {
+      filter_status?: string; filter_claim?: string; file?: string; ids?: string[]; offset?: number; limit?: number;
     };
     const entries = await this.loadRegistry(registry_path);
     const counts: Record<string, number> = {};
     for (const e of entries) counts[e.status] = (counts[e.status] || 0) + 1;
     let filtered = entries;
+    if (ids) { const idSet = new Set(ids); filtered = filtered.filter(e => idSet.has(e.id)); }
     if (file) filtered = filtered.filter(e => e.file.endsWith(file) || e.id.startsWith(file.replace(/\.md$/, '')));
     if (filter_status) filtered = filtered.filter(e => e.status === filter_status);
     if (filter_claim !== undefined) {
