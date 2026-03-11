@@ -37,10 +37,10 @@ export function readTools(): ToolDefinition[] {
     },
     {
       name: 'bib:search',
-      description: 'Search bibliography entries across all fields: author, title, type, year, editor, container-title. Returns matching entries.',
+      description: 'Search bibliography entries across all fields: author, title, type, year, editor, container-title. Use ONE search term per call (e.g., "Pahlow" or "OLG Köln"). For multiple lookups, call this tool multiple times.',
       inputSchema: z.object({
         file: fileParam(),
-        query: z.string().describe('Search term (case-insensitive, matches any field)'),
+        query: z.string().describe('Single search term (case-insensitive, matches any field). Do NOT combine multiple terms — use separate calls instead.'),
         limit: z.number().optional().default(20).describe('Maximum results to return (default: 20)'),
       }),
     },
